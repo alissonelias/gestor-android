@@ -1,6 +1,0 @@
-fix: corrige compilação Kotlin (import ApiResult e leitura de sessão em coroutine)
-
-- Adiciona import de ApiResult na MainActivity (quando não exaustivo)
-- Move a leitura da sessão (DataStore, suspend) para dentro da coroutine no
-  LocationTrackingService
-- Remove variável notif não usada no callback de permissões
