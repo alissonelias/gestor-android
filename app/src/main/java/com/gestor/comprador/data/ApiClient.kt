@@ -15,21 +15,10 @@ sealed class ApiResult<out T> {
     data class Error(val message: String, val httpCode: Int = 0) : ApiResult<Nothing>()
 }
 
-data class LoginData(
-    val token: String,
-    val id: String,
-    val name: String,
-    val username: String,
-    val role: String,
-)
-
 /**
- * Cliente HTTP para o backend do Gestor.
- * Usa OkHttp + org.json (sem dependências pesadas).
- *
- * Toda chamada é blindada: a construção do Request (que pode lançar
- * IllegalArgumentException com URL inválida) e a execução estão dentro do
- * try/catch — NUNCA lança exceção para a UI.
+ * Cliente HTTP para o backend do Gestor (apenas endpoints de rastreamento).
+ * O login acontece no site (WebView) — o app é intermediário.
+ * Toda chamada é blindada: nunca lança exceção para a UI.
  */
 class ApiClient(private val timeoutSeconds: Long = 30) {
 
@@ -40,57 +29,6 @@ class ApiClient(private val timeoutSeconds: Long = 30) {
         .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
-
-    /** POST /api/login — autentica e retorna o token. */
-    suspend fun login(username: String, password: String, deviceId: String): ApiResult<LoginData> =
-        withContext(Dispatchers.IO) {
-            val body = JSONObject()
-                .put("username", username)
-                .put("password", password)
-                .put("deviceId", deviceId)
-                .put("deviceName", "Android Comprador")
-                .toString()
-                .toRequestBody(jsonMediaType)
-
-            // 1ª tentativa + 1 retry em falha de REDE/timeout (não reenvia em HTTP error).
-            var lastError: String? = null
-            repeat(2) {
-                try {
-                    val request = Request.Builder()
-                        .url("${AppConfig.BASE_URL}/api/login")
-                        .post(body)
-                        .build()
-
-                    client.newCall(request).execute().use { resp ->
-                        val text = resp.body?.string() ?: ""
-                        val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
-                        if (resp.isSuccessful && json.has("token")) {
-                            return@withContext ApiResult.Success(
-                                LoginData(
-                                    token = json.getString("token"),
-                                    id = json.optString("id", ""),
-                                    name = json.optString("name", ""),
-                                    username = json.optString("username", ""),
-                                    role = json.optString("role", ""),
-                                )
-                            )
-                        }
-                        // HTTP respondeu — não tenta de novo (credencial/problema real).
-                        return@withContext ApiResult.Error(
-                            json.optString("error", "Falha no login (HTTP ${resp.code})."),
-                            resp.code
-                        )
-                    }
-                } catch (e: Exception) {
-                    lastError = e.message ?: "sem detalhes"
-                    // timeout/rede — aguarda um pouco e tenta mais uma vez.
-                    if (it == 0) {
-                        kotlinx.coroutines.delay(1500)
-                    }
-                }
-            }
-            ApiResult.Error("Falha de conexão (timeout): $lastError")
-        }
 
     /** Envia a posição atual do comprador — POST /api/buyer-tracking (upsert). */
     suspend fun sendPosition(

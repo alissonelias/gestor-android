@@ -2,42 +2,62 @@ package com.gestor.comprador
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.gestor.comprador.data.ApiClient
-import com.gestor.comprador.data.ApiResult
 import com.gestor.comprador.data.AppConfig
 import com.gestor.comprador.data.SessionManager
 import com.gestor.comprador.databinding.ActivityMainBinding
 import com.gestor.comprador.service.LocationTrackingService
 import com.gestor.comprador.service.TrackingState
 import kotlinx.coroutines.launch
-import java.util.Locale
-import java.util.UUID
+import org.json.JSONObject
 
+/**
+ * O app é um WebView do site do comprador (dashboard completa). O usuário faz
+ * login no próprio site; o app cuida apenas do GPS em segundo plano.
+ *
+ * Um bridge JavaScript lê o token e o usuário do localStorage do site
+ * (assiscare_token / assiscare_user) e alimenta o SessionManager, que o
+ * LocationTrackingService usa para persistir a posição.
+ */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var sessionManager: SessionManager
-    private val api = ApiClient()
+    private val uiHandler = Handler(Looper.getMainLooper())
+
+    /** Poll de sessão do site (o login pode ocorrer a qualquer momento). */
+    private var sessionPollRunnable: Runnable? = null
+    private var lastToken: String? = null
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             val fine = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
             val coarse = grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
             if (fine || coarse) {
+                maybeAskBatteryOptimization()
                 startTrackingService()
+                binding.permissionOverlay.visibility = android.view.View.GONE
             } else {
                 Toast.makeText(this, getString(R.string.permission_denied), Toast.LENGTH_LONG).show()
             }
@@ -49,95 +69,120 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         sessionManager = SessionManager(this)
+        setupWebView()
+        binding.btnGrantPermission.setOnClickListener { requestPermissionsAndStart() }
 
-        binding.btnLogin.setOnClickListener { doLogin() }
-        binding.btnLogout.setOnClickListener { doLogout() }
-        binding.btnToggleTracking.setOnClickListener { toggleTracking() }
-        binding.btnToggleTrip.setOnClickListener { toggleTrip() }
+        // Mostra o overlay de permissão só na primeira execução (sem permissão ainda).
+        if (hasLocationPermission()) {
+            binding.permissionOverlay.visibility = android.view.View.GONE
+            maybeAskBatteryOptimization()
+            startTrackingService()
+        } else {
+            binding.permissionOverlay.visibility = android.view.View.VISIBLE
+            binding.tvGpsStatus.text = getString(R.string.tracking_off)
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        refreshSessionUi()
-        updateTrackingUi()
-        updateTripUi()
-        prefillCredentialsIfLoggedOut()
+        updateGpsStatusUi()
     }
 
-    /** Pré-preenche usuário/senha se o checkbox "Lembrar credenciais" estava marcado. */
-    private fun prefillCredentialsIfLoggedOut() {
-        lifecycleScope.launch {
-            val session = sessionManager.read()
-            if (session == null) {
-                val creds = sessionManager.rememberedCredentials()
-                binding.etUsername.setText(creds.username)
-                binding.etPassword.setText(creds.password)
-                binding.cbRemember.isChecked = creds.remember
+    override fun onDestroy() {
+        sessionPollRunnable?.let { uiHandler.removeCallbacks(it) }
+        super.onDestroy()
+    }
+
+    // ------------------------------------------------------------------
+    // WebView
+    // ------------------------------------------------------------------
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setupWebView() {
+        val webView = binding.webView
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            cacheMode = WebSettings.LOAD_DEFAULT
+            mediaPlaybackRequiresUserGesture = false
+        }
+        // Mantém a sessão do site (cookies + localStorage) entre aberturas.
+        webView.settings.domStorageEnabled = true
+
+        webView.addJavascriptInterface(SiteBridge(), "AndroidBridge")
+
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                // Mantém tudo dentro da WebView; abre links externos no browser.
+                val url = request.url.toString()
+                if (url.startsWith(AppConfig.BASE_URL)) return false
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (e: Exception) { /* ignora */ }
+                return true
+            }
+        }
+
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                // Câmera/mic do site (usados pelo comprador no checkout/assinatura).
+                request.grant(request.resources)
+            }
+        }
+
+        // Carrega o site do comprador.
+        webView.loadUrl(AppConfig.BASE_URL)
+        startSessionPolling()
+    }
+
+    /**
+     * Injeta periodicamente um JS que lê o token/usuário do localStorage do site
+     * e repassa à bridge — cobre login/logout a qualquer momento.
+     */
+    private fun startSessionPolling() {
+        sessionPollRunnable?.let { uiHandler.removeCallbacks(it) }
+        val runnable = object : Runnable {
+            override fun run() {
+                val webView = binding.webView
+                val js = """
+                    (function() {
+                        var t = localStorage.getItem('assiscare_token');
+                        var u = null;
+                        try { u = JSON.parse(localStorage.getItem('assiscare_user') || 'null'); } catch(e) {}
+                        AndroidBridge.onSession(t || '', u && u.id ? u.id : '', u && u.name ? u.name : '');
+                    })();
+                """.trimIndent()
+                webView.evaluateJavascript(js, null)
+                uiHandler.postDelayed(this, 3000L)
+            }
+        }
+        sessionPollRunnable = runnable
+        uiHandler.post(runnable)
+    }
+
+    /** Bridge recebe a sessão do site (chamada pelo JavaScript injetado). */
+    inner class SiteBridge {
+        @JavascriptInterface
+        fun onSession(token: String, userId: String, userName: String) {
+            if (token == lastToken) return
+            lastToken = token
+            lifecycleScope.launch {
+                sessionManager.saveSession(
+                    token = token,
+                    userId = userId,
+                    userName = userName,
+                )
+                updateGpsStatusUi()
             }
         }
     }
 
     // ------------------------------------------------------------------
-    // Login
+    // Permissões e GPS
     // ------------------------------------------------------------------
-    private fun doLogin() {
-        val username = binding.etUsername.text?.toString()?.trim().orEmpty()
-        val password = binding.etPassword.text?.toString().orEmpty()
-
-        if (username.isEmpty() || password.isEmpty()) {
-            showLoginError("Preencha usuário e senha.")
-            return
-        }
-
-        // Salva credenciais se o checkbox estiver marcado (antes da chamada).
-        lifecycleScope.launch {
-            sessionManager.saveRememberedCredentials(
-                binding.cbRemember.isChecked,
-                username,
-                password
-            )
-        }
-
-        val deviceId = "android-" + UUID.randomUUID().toString().take(12)
-        binding.btnLogin.isEnabled = false
-        binding.btnLogin.text = "Entrando..."
-
-        lifecycleScope.launch {
-            val result = api.login(username, password, deviceId)
-            binding.btnLogin.isEnabled = true
-            binding.btnLogin.text = getString(R.string.login_btn)
-
-            when (result) {
-                is ApiResult.Success -> {
-                    val d = result.data
-                    sessionManager.saveLogin(d.token, d.id, d.name, d.role)
-                    refreshSessionUi()
-                    showLoginError(null)
-                    Toast.makeText(this@MainActivity, "Bem-vindo, ${d.name}!", Toast.LENGTH_SHORT).show()
-                }
-                is ApiResult.Error -> showLoginError(result.message)
-            }
-        }
-    }
-
-    private fun doLogout() {
-        stopTrackingService()
-        lifecycleScope.launch {
-            sessionManager.clear()
-            refreshSessionUi()
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Rastreamento GPS
-    // ------------------------------------------------------------------
-    private fun toggleTracking() {
-        if (TrackingState.running) {
-            stopTrackingService()
-        } else {
-            requestPermissionsAndStart()
-        }
-    }
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     private fun requestPermissionsAndStart() {
         val needed = mutableListOf(
@@ -152,6 +197,7 @@ class MainActivity : AppCompatActivity() {
         if (missing.isEmpty()) {
             maybeAskBatteryOptimization()
             startTrackingService()
+            binding.permissionOverlay.visibility = android.view.View.GONE
         } else {
             permissionLauncher.launch(missing.toTypedArray())
         }
@@ -175,107 +221,23 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, LocationTrackingService::class.java)
             .setAction(LocationTrackingService.ACTION_START)
         ContextCompat.startForegroundService(this, intent)
-        Toast.makeText(this, "Rastreamento iniciado", Toast.LENGTH_SHORT).show()
-        updateTrackingUi()
+        updateGpsStatusUi()
     }
 
     private fun stopTrackingService() {
         val intent = Intent(this, LocationTrackingService::class.java)
             .setAction(LocationTrackingService.ACTION_STOP)
         startService(intent)
-        Toast.makeText(this, "Rastreamento parado", Toast.LENGTH_SHORT).show()
-        updateTrackingUi()
-    }
-
-    // ------------------------------------------------------------------
-    // Viagem de compras
-    // ------------------------------------------------------------------
-    @SuppressLint("SetTextI18n")
-    private fun toggleTrip() {
-        lifecycleScope.launch {
-            val session = sessionManager.read() ?: return@launch
-            val finish = TrackingState.tripActive
-            binding.btnToggleTrip.isEnabled = false
-            val result = api.toggleTrip(session.token, finish)
-            binding.btnToggleTrip.isEnabled = true
-
-            when (result) {
-                is ApiResult.Success -> {
-                    TrackingState.tripActive = !finish
-                    updateTripUi()
-                    Toast.makeText(
-                        this@MainActivity,
-                        if (finish) "Viagem finalizada!" else "Viagem iniciada!",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-                is ApiResult.Error -> showGeneralError(result.message)
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // UI helpers
-    // ------------------------------------------------------------------
-    private fun refreshSessionUi() {
-        lifecycleScope.launch {
-            val session = sessionManager.read()
-            val logged = session != null
-            binding.loginContainer.visibility = if (logged) android.view.View.GONE else android.view.View.VISIBLE
-            binding.dashboardContainer.visibility = if (logged) android.view.View.VISIBLE else android.view.View.GONE
-            if (logged) {
-                binding.tvUserInfo.text = "${session!!.userName} — ${session.role}"
-                binding.tvSubtitle.text = "Conectado em ${AppConfig.BASE_URL}"
-            } else {
-                binding.tvSubtitle.text = "Login e rastreamento GPS do comprador"
-            }
-        }
+        updateGpsStatusUi()
     }
 
     @SuppressLint("SetTextI18n")
-    private fun updateTrackingUi() {
-        val loc: Location? = TrackingState.lastLocation
-        binding.tvLastLocation.text = if (loc != null) {
-            String.format(Locale.US, "📍 %.6f, %.6f", loc.latitude, loc.longitude)
-        } else {
-            getString(R.string.no_location)
+    private fun updateGpsStatusUi() {
+        val logged = lastToken != null
+        binding.tvGpsStatus.text = when {
+            !TrackingState.running -> getString(R.string.tracking_off)
+            !logged -> "Rastreando… aguardando login no site"
+            else -> getString(R.string.tracking_on)
         }
-        binding.tvLastUpdate.text = if (TrackingState.lastSendAt > 0) {
-            val d = java.util.Date(TrackingState.lastSendAt)
-            "Último envio: " + java.text.SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(d)
-        } else {
-            "Aguardando primeira posição..."
-        }
-        binding.tvTrackingStatus.text = if (TrackingState.running) {
-            "Status: ● Rastreando (segundo plano ativo)"
-        } else {
-            "Status: ○ Rastreamento parado"
-        }
-        binding.btnToggleTracking.text =
-            if (TrackingState.running) getString(R.string.tracking_stop) else getString(R.string.tracking_start)
-        binding.btnToggleTracking.backgroundTintList = android.content.res.ColorStateList.valueOf(
-            if (TrackingState.running) getColor(R.color.danger) else getColor(R.color.accent)
-        )
-    }
-
-    @SuppressLint("SetTextI18n")
-    private fun updateTripUi() {
-        binding.tvTripStatus.text = if (TrackingState.tripActive) {
-            "Status: ● Viagem em andamento"
-        } else {
-            "Status: ○ Nenhuma viagem ativa"
-        }
-        binding.btnToggleTrip.text =
-            if (TrackingState.tripActive) getString(R.string.trip_finish) else getString(R.string.trip_start)
-    }
-
-    private fun showLoginError(msg: String?) {
-        binding.tvLoginError.text = msg
-        binding.tvLoginError.visibility = if (msg == null) android.view.View.GONE else android.view.View.VISIBLE
-    }
-
-    private fun showGeneralError(msg: String) {
-        binding.tvGeneralError.text = msg
-        binding.tvGeneralError.visibility = android.view.View.VISIBLE
     }
 }

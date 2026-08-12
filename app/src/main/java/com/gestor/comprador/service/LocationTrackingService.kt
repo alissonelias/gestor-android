@@ -18,7 +18,6 @@ import com.gestor.comprador.MainActivity
 import com.gestor.comprador.R
 import com.gestor.comprador.data.ApiClient
 import com.gestor.comprador.data.ApiResult
-import com.gestor.comprador.data.Session
 import com.gestor.comprador.data.SessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,12 +29,13 @@ import kotlinx.coroutines.launch
 
 /**
  * Foreground Service que mantém o GPS ativo em segundo plano e envia a posição
- * para o backend periodicamente.
+ * do comprador logado no site.
  *
  * - Obtém localização via LocationManager (GPS + rede).
- * - Envia para /api/buyer-tracking (posição atual) a cada INTERVAL_MS.
- * - Envia um evento para /api/buyer-tracking-events em cada atualização
- *   significativa de posição.
+ * - A cada ciclo, lê o token de sessão do site (SessionManager) e envia para
+ *   /api/buyer-tracking (posição atual) a cada SEND_INTERVAL_MS.
+ * - Registra eventos em /api/buyer-tracking-events quando há movimento ≥ 50m.
+ * - Sem token (usuário não logado no site), aguarda sem enviar.
  */
 class LocationTrackingService : Service(), LocationListener {
 
@@ -56,8 +56,8 @@ class LocationTrackingService : Service(), LocationListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var sendJob: Job? = null
     private var locationManager: LocationManager? = null
-    private var session: Session? = null
     private var lastEventLocation: Location? = null
+    private var sessionManager: SessionManager? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -75,35 +75,25 @@ class LocationTrackingService : Service(), LocationListener {
 
     private fun startTracking() {
         startForegroundCompat()
+        sessionManager = SessionManager(this)
 
         val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         locationManager = lm
         try {
-            lm.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER,
-                5000L,
-                5f,
-                this
-            )
+            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, this)
         } catch (e: SecurityException) {
             // sem permissão — a UI já pediu antes de iniciar
         }
         try {
-            lm.requestLocationUpdates(
-                LocationManager.NETWORK_PROVIDER,
-                5000L,
-                5f,
-                this
-            )
+            lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 5f, this)
         } catch (e: SecurityException) {
             // ignora
         }
+
         TrackingState.running = true
 
         sendJob?.cancel()
         sendJob = scope.launch {
-            // Lê a sessão (DataStore) dentro da coroutine — função suspend.
-            session = SessionManager(this@LocationTrackingService).read()
             while (isActive) {
                 sendCurrentPosition()
                 delay(SEND_INTERVAL_MS)
@@ -155,9 +145,9 @@ class LocationTrackingService : Service(), LocationListener {
         nm.notify(NOTIFICATION_ID, buildNotification(CHANNEL_ID, text))
     }
 
-    /** Envia a posição mais recente para o backend. */
+    /** Envia a posição mais recente — só se houver sessão ativa no site. */
     private suspend fun sendCurrentPosition() {
-        val s = session ?: return
+        val s = sessionManager?.read() ?: return
         val loc = TrackingState.lastLocation ?: return
 
         val result = ApiClient().sendPosition(
@@ -180,7 +170,7 @@ class LocationTrackingService : Service(), LocationListener {
 
     /** Registra um evento quando houve movimento significativo. */
     private suspend fun sendEventIfMoved(loc: Location) {
-        val s = session ?: return
+        val s = sessionManager?.read() ?: return
         val prev = lastEventLocation
         if (prev != null) {
             val dist = prev.distanceTo(loc)
