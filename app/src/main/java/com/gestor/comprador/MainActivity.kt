@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.webkit.JavascriptInterface
+import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -127,6 +128,16 @@ class MainActivity : AppCompatActivity() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 // Câmera/mic do site (usados pelo comprador no checkout/assinatura).
                 request.grant(request.resources)
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?,
+                callback: GeolocationPermissions.Callback
+            ) {
+                // Concede automaticamente a geolocalização ao site: o app já
+                // solicitou a permissão de localização ao SO na primeira execução.
+                // Sem isso, o navigator.geolocation do site fica bloqueado.
+                callback.invoke(origin, true, false)
             }
         }
 
