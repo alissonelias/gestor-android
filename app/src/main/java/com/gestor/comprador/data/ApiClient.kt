@@ -26,6 +26,10 @@ data class LoginData(
 /**
  * Cliente HTTP para o backend do Gestor.
  * Usa OkHttp + org.json (sem dependências pesadas).
+ *
+ * Toda chamada é blindada: a construção do Request (que pode lançar
+ * IllegalArgumentException com URL inválida) e a execução estão dentro do
+ * try/catch — NUNCA lança exceção para a UI.
  */
 class ApiClient(private val timeoutSeconds: Long = 20) {
 
@@ -37,22 +41,22 @@ class ApiClient(private val timeoutSeconds: Long = 20) {
         .build()
 
     /** POST /api/login — autentica e retorna o token. */
-    suspend fun login(baseUrl: String, username: String, password: String, deviceId: String): ApiResult<LoginData> =
+    suspend fun login(username: String, password: String, deviceId: String): ApiResult<LoginData> =
         withContext(Dispatchers.IO) {
-            val body = JSONObject()
-                .put("username", username)
-                .put("password", password)
-                .put("deviceId", deviceId)
-                .put("deviceName", "Android Comprador")
-                .toString()
-                .toRequestBody(jsonMediaType)
-
-            val request = Request.Builder()
-                .url("${baseUrl.trimEnd('/')}/api/login")
-                .post(body)
-                .build()
-
             try {
+                val body = JSONObject()
+                    .put("username", username)
+                    .put("password", password)
+                    .put("deviceId", deviceId)
+                    .put("deviceName", "Android Comprador")
+                    .toString()
+                    .toRequestBody(jsonMediaType)
+
+                val request = Request.Builder()
+                    .url("${AppConfig.BASE_URL}/api/login")
+                    .post(body)
+                    .build()
+
                 client.newCall(request).execute().use { resp ->
                     val text = resp.body?.string() ?: ""
                     val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
@@ -77,7 +81,6 @@ class ApiClient(private val timeoutSeconds: Long = 20) {
 
     /** Envia a posição atual do comprador — POST /api/buyer-tracking (upsert). */
     suspend fun sendPosition(
-        baseUrl: String,
         token: String,
         userId: String,
         userName: String,
@@ -86,25 +89,25 @@ class ApiClient(private val timeoutSeconds: Long = 20) {
         status: String,
         locationName: String
     ): ApiResult<JSONObject> = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-            .put("userId", userId)
-            .put("userName", userName)
-            .put("latitude", lat)
-            .put("longitude", lng)
-            .put("currentStatus", status)
-            .put("currentLocationName", locationName)
-            .put("lastUpdated", java.time.Instant.now().toString())
-            .toString()
-            .toRequestBody(jsonMediaType)
-
-        val request = Request.Builder()
-            .url("${baseUrl.trimEnd('/')}/api/buyer-tracking")
-            .header("Authorization", "Bearer $token")
-            .header("x-auth-token", token)
-            .post(body)
-            .build()
-
         try {
+            val body = JSONObject()
+                .put("userId", userId)
+                .put("userName", userName)
+                .put("latitude", lat)
+                .put("longitude", lng)
+                .put("currentStatus", status)
+                .put("currentLocationName", locationName)
+                .put("lastUpdated", java.time.Instant.now().toString())
+                .toString()
+                .toRequestBody(jsonMediaType)
+
+            val request = Request.Builder()
+                .url("${AppConfig.BASE_URL}/api/buyer-tracking")
+                .header("Authorization", "Bearer $token")
+                .header("x-auth-token", token)
+                .post(body)
+                .build()
+
             client.newCall(request).execute().use { resp ->
                 if (resp.isSuccessful) ApiResult.Success(JSONObject())
                 else ApiResult.Error("Falha ao enviar posição (HTTP ${resp.code}).", resp.code)
@@ -116,7 +119,6 @@ class ApiClient(private val timeoutSeconds: Long = 20) {
 
     /** Registra um evento de posição no histórico — POST /api/buyer-tracking-events. */
     suspend fun sendEvent(
-        baseUrl: String,
         token: String,
         lat: Double,
         lng: Double,
@@ -124,23 +126,23 @@ class ApiClient(private val timeoutSeconds: Long = 20) {
         locationName: String,
         eventType: String = "position"
     ): ApiResult<JSONObject> = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-            .put("latitude", lat)
-            .put("longitude", lng)
-            .put("status", status)
-            .put("locationName", locationName)
-            .put("eventType", eventType)
-            .toString()
-            .toRequestBody(jsonMediaType)
-
-        val request = Request.Builder()
-            .url("${baseUrl.trimEnd('/')}/api/buyer-tracking-events")
-            .header("Authorization", "Bearer $token")
-            .header("x-auth-token", token)
-            .post(body)
-            .build()
-
         try {
+            val body = JSONObject()
+                .put("latitude", lat)
+                .put("longitude", lng)
+                .put("status", status)
+                .put("locationName", locationName)
+                .put("eventType", eventType)
+                .toString()
+                .toRequestBody(jsonMediaType)
+
+            val request = Request.Builder()
+                .url("${AppConfig.BASE_URL}/api/buyer-tracking-events")
+                .header("Authorization", "Bearer $token")
+                .header("x-auth-token", token)
+                .post(body)
+                .build()
+
             client.newCall(request).execute().use { resp ->
                 if (resp.isSuccessful) ApiResult.Success(JSONObject())
                 else ApiResult.Error("Falha ao registrar evento (HTTP ${resp.code}).", resp.code)
@@ -152,20 +154,19 @@ class ApiClient(private val timeoutSeconds: Long = 20) {
 
     /** Inicia ou finaliza uma viagem — POST /api/buyer-trips. */
     suspend fun toggleTrip(
-        baseUrl: String,
         token: String,
         finish: Boolean
     ): ApiResult<JSONObject> = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-        if (finish) body.put("finishedAt", java.time.Instant.now().toString())
-        val request = Request.Builder()
-            .url("${baseUrl.trimEnd('/')}/api/buyer-trips")
-            .header("Authorization", "Bearer $token")
-            .header("x-auth-token", token)
-            .post(body.toString().toRequestBody(jsonMediaType))
-            .build()
-
         try {
+            val body = JSONObject()
+            if (finish) body.put("finishedAt", java.time.Instant.now().toString())
+            val request = Request.Builder()
+                .url("${AppConfig.BASE_URL}/api/buyer-trips")
+                .header("Authorization", "Bearer $token")
+                .header("x-auth-token", token)
+                .post(body.toString().toRequestBody(jsonMediaType))
+                .build()
+
             client.newCall(request).execute().use { resp ->
                 val text = resp.body?.string() ?: ""
                 val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }

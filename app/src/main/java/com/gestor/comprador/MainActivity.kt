@@ -13,16 +13,15 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.gestor.comprador.data.ApiClient
 import com.gestor.comprador.data.ApiResult
+import com.gestor.comprador.data.AppConfig
 import com.gestor.comprador.data.SessionManager
 import com.gestor.comprador.databinding.ActivityMainBinding
 import com.gestor.comprador.service.LocationTrackingService
 import com.gestor.comprador.service.TrackingState
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.UUID
@@ -68,12 +67,11 @@ class MainActivity : AppCompatActivity() {
     // Login
     // ------------------------------------------------------------------
     private fun doLogin() {
-        val serverUrl = binding.etServerUrl.text?.toString()?.trim().orEmpty()
         val username = binding.etUsername.text?.toString()?.trim().orEmpty()
         val password = binding.etPassword.text?.toString().orEmpty()
 
-        if (serverUrl.isEmpty() || username.isEmpty() || password.isEmpty()) {
-            showLoginError("Preencha URL, usuário e senha.")
+        if (username.isEmpty() || password.isEmpty()) {
+            showLoginError("Preencha usuário e senha.")
             return
         }
 
@@ -82,14 +80,14 @@ class MainActivity : AppCompatActivity() {
         binding.btnLogin.text = "Entrando..."
 
         lifecycleScope.launch {
-            val result = api.login(serverUrl, username, password, deviceId)
+            val result = api.login(username, password, deviceId)
             binding.btnLogin.isEnabled = true
             binding.btnLogin.text = getString(R.string.login_btn)
 
             when (result) {
                 is ApiResult.Success -> {
                     val d = result.data
-                    sessionManager.saveLogin(serverUrl, d.token, d.id, d.name, d.role)
+                    sessionManager.saveLogin(d.token, d.id, d.name, d.role)
                     refreshSessionUi()
                     showLoginError(null)
                     Toast.makeText(this@MainActivity, "Bem-vindo, ${d.name}!", Toast.LENGTH_SHORT).show()
@@ -175,7 +173,7 @@ class MainActivity : AppCompatActivity() {
             val session = sessionManager.read() ?: return@launch
             val finish = TrackingState.tripActive
             binding.btnToggleTrip.isEnabled = false
-            val result = api.toggleTrip(session.serverUrl, session.token, finish)
+            val result = api.toggleTrip(session.token, finish)
             binding.btnToggleTrip.isEnabled = true
 
             when (result) {
@@ -204,7 +202,7 @@ class MainActivity : AppCompatActivity() {
             binding.dashboardContainer.visibility = if (logged) android.view.View.VISIBLE else android.view.View.GONE
             if (logged) {
                 binding.tvUserInfo.text = "${session!!.userName} — ${session.role}"
-                binding.tvSubtitle.text = "Conectado ao sistema em ${session.serverUrl}"
+                binding.tvSubtitle.text = "Conectado em ${AppConfig.BASE_URL}"
             } else {
                 binding.tvSubtitle.text = "Login e rastreamento GPS do comprador"
             }

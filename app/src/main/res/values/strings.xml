@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Gestor Comprador</string>
     <string name="login_title">Login do Comprador</string>
-    <string name="server_url">URL do Sistema</string>
+    <string name="login_subtitle">Acesse em https://www.tonyceel.com.br</string>
     <string name="username">Usuário</string>
     <string name="password">Senha</string>
     <string name="login_btn">Entrar</string>

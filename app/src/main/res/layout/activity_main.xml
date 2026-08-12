@@ -51,21 +51,6 @@
             <com.google.android.material.textfield.TextInputLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:hint="@string/server_url"
-                app:startIconDrawable="@android:drawable/ic_menu_compass">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/etServerUrl"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="textUri"
-                    android:text="http://192.168.0.100:3000" />
-            </com.google.android.material.textfield.TextInputLayout>
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:hint="@string/username"
                 app:startIconDrawable="@android:drawable/ic_menu_myplaces">

@@ -161,7 +161,6 @@ class LocationTrackingService : Service(), LocationListener {
         val loc = TrackingState.lastLocation ?: return
 
         val result = ApiClient().sendPosition(
-            baseUrl = s.serverUrl,
             token = s.token,
             userId = s.userId,
             userName = s.userName,
@@ -189,7 +188,6 @@ class LocationTrackingService : Service(), LocationListener {
         }
         lastEventLocation = loc
         ApiClient().sendEvent(
-            baseUrl = s.serverUrl,
             token = s.token,
             lat = loc.latitude,
             lng = loc.longitude,
