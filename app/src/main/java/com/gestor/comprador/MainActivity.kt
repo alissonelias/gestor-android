@@ -61,6 +61,20 @@ class MainActivity : AppCompatActivity() {
         refreshSessionUi()
         updateTrackingUi()
         updateTripUi()
+        prefillCredentialsIfLoggedOut()
+    }
+
+    /** Pré-preenche usuário/senha se o checkbox "Lembrar credenciais" estava marcado. */
+    private fun prefillCredentialsIfLoggedOut() {
+        lifecycleScope.launch {
+            val session = sessionManager.read()
+            if (session == null) {
+                val creds = sessionManager.rememberedCredentials()
+                binding.etUsername.setText(creds.username)
+                binding.etPassword.setText(creds.password)
+                binding.cbRemember.isChecked = creds.remember
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -73,6 +87,15 @@ class MainActivity : AppCompatActivity() {
         if (username.isEmpty() || password.isEmpty()) {
             showLoginError("Preencha usuário e senha.")
             return
+        }
+
+        // Salva credenciais se o checkbox estiver marcado (antes da chamada).
+        lifecycleScope.launch {
+            sessionManager.saveRememberedCredentials(
+                binding.cbRemember.isChecked,
+                username,
+                password
+            )
         }
 
         val deviceId = "android-" + UUID.randomUUID().toString().take(12)

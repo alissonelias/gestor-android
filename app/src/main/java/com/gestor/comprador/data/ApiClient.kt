@@ -31,52 +31,65 @@ data class LoginData(
  * IllegalArgumentException com URL inválida) e a execução estão dentro do
  * try/catch — NUNCA lança exceção para a UI.
  */
-class ApiClient(private val timeoutSeconds: Long = 20) {
+class ApiClient(private val timeoutSeconds: Long = 30) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
         .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
         .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
         .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     /** POST /api/login — autentica e retorna o token. */
     suspend fun login(username: String, password: String, deviceId: String): ApiResult<LoginData> =
         withContext(Dispatchers.IO) {
-            try {
-                val body = JSONObject()
-                    .put("username", username)
-                    .put("password", password)
-                    .put("deviceId", deviceId)
-                    .put("deviceName", "Android Comprador")
-                    .toString()
-                    .toRequestBody(jsonMediaType)
+            val body = JSONObject()
+                .put("username", username)
+                .put("password", password)
+                .put("deviceId", deviceId)
+                .put("deviceName", "Android Comprador")
+                .toString()
+                .toRequestBody(jsonMediaType)
 
-                val request = Request.Builder()
-                    .url("${AppConfig.BASE_URL}/api/login")
-                    .post(body)
-                    .build()
+            // 1ª tentativa + 1 retry em falha de REDE/timeout (não reenvia em HTTP error).
+            var lastError: String? = null
+            repeat(2) {
+                try {
+                    val request = Request.Builder()
+                        .url("${AppConfig.BASE_URL}/api/login")
+                        .post(body)
+                        .build()
 
-                client.newCall(request).execute().use { resp ->
-                    val text = resp.body?.string() ?: ""
-                    val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
-                    if (resp.isSuccessful && json.has("token")) {
-                        ApiResult.Success(
-                            LoginData(
-                                token = json.getString("token"),
-                                id = json.optString("id", ""),
-                                name = json.optString("name", ""),
-                                username = json.optString("username", ""),
-                                role = json.optString("role", ""),
+                    client.newCall(request).execute().use { resp ->
+                        val text = resp.body?.string() ?: ""
+                        val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
+                        if (resp.isSuccessful && json.has("token")) {
+                            return@withContext ApiResult.Success(
+                                LoginData(
+                                    token = json.getString("token"),
+                                    id = json.optString("id", ""),
+                                    name = json.optString("name", ""),
+                                    username = json.optString("username", ""),
+                                    role = json.optString("role", ""),
+                                )
                             )
+                        }
+                        // HTTP respondeu — não tenta de novo (credencial/problema real).
+                        return@withContext ApiResult.Error(
+                            json.optString("error", "Falha no login (HTTP ${resp.code})."),
+                            resp.code
                         )
-                    } else {
-                        ApiResult.Error(json.optString("error", "Falha no login (HTTP ${resp.code})."), resp.code)
+                    }
+                } catch (e: Exception) {
+                    lastError = e.message ?: "sem detalhes"
+                    // timeout/rede — aguarda um pouco e tenta mais uma vez.
+                    if (it == 0) {
+                        kotlinx.coroutines.delay(1500)
                     }
                 }
-            } catch (e: Exception) {
-                ApiResult.Error("Falha de conexão: ${e.message ?: "sem detalhes"}")
             }
+            ApiResult.Error("Falha de conexão (timeout): $lastError")
         }
 
     /** Envia a posição atual do comprador — POST /api/buyer-tracking (upsert). */

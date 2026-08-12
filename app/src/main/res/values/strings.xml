@@ -6,6 +6,7 @@
     <string name="username">Usuário</string>
     <string name="password">Senha</string>
     <string name="login_btn">Entrar</string>
+    <string name="remember_credentials">Lembrar credenciais neste aparelho</string>
     <string name="logout_btn">Sair</string>
     <string name="tracking_start">Iniciar Rastreamento</string>
     <string name="tracking_stop">Parar Rastreamento</string>
