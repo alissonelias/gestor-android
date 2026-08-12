@@ -75,7 +75,6 @@ class LocationTrackingService : Service(), LocationListener {
 
     private fun startTracking() {
         startForegroundCompat()
-        session = SessionManager(this).read()
 
         val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         locationManager = lm
@@ -99,11 +98,12 @@ class LocationTrackingService : Service(), LocationListener {
         } catch (e: SecurityException) {
             // ignora
         }
-
         TrackingState.running = true
 
         sendJob?.cancel()
         sendJob = scope.launch {
+            // Lê a sessão (DataStore) dentro da coroutine — função suspend.
+            session = SessionManager(this@LocationTrackingService).read()
             while (isActive) {
                 sendCurrentPosition()
                 delay(SEND_INTERVAL_MS)

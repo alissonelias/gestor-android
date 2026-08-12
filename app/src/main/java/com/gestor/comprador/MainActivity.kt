@@ -17,6 +17,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.gestor.comprador.data.ApiClient
+import com.gestor.comprador.data.ApiResult
 import com.gestor.comprador.data.SessionManager
 import com.gestor.comprador.databinding.ActivityMainBinding
 import com.gestor.comprador.service.LocationTrackingService
@@ -36,7 +37,6 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             val fine = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
             val coarse = grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-            val notif = Build.VERSION.SDK_INT < 33 || grants[Manifest.permission.POST_NOTIFICATIONS] == true
             if (fine || coarse) {
                 startTrackingService()
             } else {
