@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gestor Comprador</string>
+    <string name="login_title">Login do Comprador</string>
+    <string name="server_url">URL do Sistema</string>
+    <string name="username">Usuário</string>
+    <string name="password">Senha</string>
+    <string name="login_btn">Entrar</string>
+    <string name="logout_btn">Sair</string>
+    <string name="tracking_start">Iniciar Rastreamento</string>
+    <string name="tracking_stop">Parar Rastreamento</string>
+    <string name="trip_start">Iniciar Viagem</string>
+    <string name="trip_finish">Finalizar Viagem</string>
+    <string name="last_location">Última localização</string>
+    <string name="no_location">—</string>
+    <string name="permission_denied">Permissão de localização negada. O rastreamento não pode iniciar.</string>
+</resources>

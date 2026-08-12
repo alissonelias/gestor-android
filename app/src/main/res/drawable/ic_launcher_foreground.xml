@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Ícone: mapa com marcador de localização -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M54,30C44.6,30 37,37.6 37,47C37,58.5 50,71 54,75C58,71 71,58.5 71,47C71,37.6 63.4,30 54,30ZM54,54C49.6,54 46,50.4 46,46C46,41.6 49.6,38 54,38C58.4,38 62,41.6 62,46C62,50.4 58.4,54 54,54Z" />
+    <path
+        android:fillColor="#0ea5e9"
+        android:pathData="M54,18L24,34V80L54,92L84,80V34L54,18ZM78,74.2L54,83.8L30,74.2V39.8L54,30.2L78,39.8V74.2Z" />
+</vector>
