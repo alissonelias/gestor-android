@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -26,8 +27,12 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.gestor.comprador.data.AppConfig
+import com.gestor.comprador.data.Session
 import com.gestor.comprador.data.SessionManager
 import com.gestor.comprador.databinding.ActivityMainBinding
+import com.gestor.comprador.push.FirebaseConfig
+import com.gestor.comprador.push.PushNotifier
+import com.gestor.comprador.push.PushRegistrar
 import com.gestor.comprador.service.LocationTrackingService
 import com.gestor.comprador.service.TrackingState
 import kotlinx.coroutines.launch
@@ -43,6 +48,12 @@ import org.json.JSONObject
  */
 class MainActivity : AppCompatActivity() {
 
+    companion object {
+        /** Extras usados pela notificação criada pelo próprio app (data-only). */
+        const val EXTRA_PUSH_PATH = "com.gestor.comprador.extra.PUSH_PATH"
+        const val EXTRA_PUSH_ORDER_ID = "com.gestor.comprador.extra.PUSH_ORDER_ID"
+    }
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var sessionManager: SessionManager
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -50,6 +61,12 @@ class MainActivity : AppCompatActivity() {
     /** Poll de sessão do site (o login pode ocorrer a qualquer momento). */
     private var sessionPollRunnable: Runnable? = null
     private var lastToken: String? = null
+    /** token + userId: também dispara quando o comprador troca no mesmo aparelho. */
+    private var lastSessionKey: String? = null
+    private var currentSession: Session? = null
+
+    /** Tela do pedido vinda de uma notificação (ex.: /?tab=compras&orderId=...). */
+    private var pendingPushPath: String? = null
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -70,6 +87,15 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         sessionManager = SessionManager(this)
+
+        // FCM: canal criado já no boot para o push do pedido aparecer como
+        // heads-up; credenciais ausentes apenas desligam o push (GPS segue igual).
+        PushNotifier.ensureChannel(this)
+        if (!FirebaseConfig.isConfigured) {
+            Log.w("MainActivity", "FCM não configurado — o app segue sem notificações.")
+        }
+        pendingPushPath = extractPushPath(intent)
+
         setupWebView()
         binding.btnGrantPermission.setOnClickListener { requestPermissionsAndStart() }
 
@@ -89,10 +115,52 @@ class MainActivity : AppCompatActivity() {
         updateGpsStatusUi()
     }
 
+    /**
+     * Toque na notificação com o app já aberto: navega a WebView para o pedido.
+     * (Em background/cold start o caminho chega pelo `onCreate`.)
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val path = extractPushPath(intent)
+        if (path != null) {
+            pendingPushPath = path
+            if (::binding.isInitialized) {
+                binding.webView.loadUrl(buildWebUrl(path))
+            }
+        }
+    }
+
     override fun onDestroy() {
         sessionPollRunnable?.let { uiHandler.removeCallbacks(it) }
         super.onDestroy()
     }
+
+    // ------------------------------------------------------------------
+    // Deep link do push
+    // ------------------------------------------------------------------
+
+    /**
+     * Lê o caminho da tela a partir do intent. Cobre os dois formatos:
+     * - notificação do próprio app (extra [EXTRA_PUSH_PATH]);
+     * - notificação exibida pelo sistema, que copia as chaves do `data` do FCM
+     *   para os extras do intent (chave "path").
+     */
+    private fun extractPushPath(intent: Intent?): String? {
+        if (intent == null) return null
+        val raw = intent.getStringExtra(EXTRA_PUSH_PATH) ?: intent.getStringExtra("path")
+        return sanitizePushPath(raw)
+    }
+
+    /** Aceita só caminho relativo do próprio site (nunca URL absoluta/outro host). */
+    private fun sanitizePushPath(raw: String?): String? {
+        val path = raw?.trim().orEmpty()
+        if (path.isEmpty()) return null
+        if (!path.startsWith("/") || path.startsWith("//") || path.contains("://")) return null
+        return path
+    }
+
+    private fun buildWebUrl(path: String?): String = AppConfig.BASE_URL + (path ?: "/")
 
     // ------------------------------------------------------------------
     // WebView
@@ -141,8 +209,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Carrega o site do comprador.
-        webView.loadUrl(AppConfig.BASE_URL)
+        // Carrega o site do comprador (ou direto a tela do pedido, se veio de push).
+        webView.loadUrl(buildWebUrl(pendingPushPath))
         startSessionPolling()
     }
 
@@ -175,8 +243,14 @@ class MainActivity : AppCompatActivity() {
     inner class SiteBridge {
         @JavascriptInterface
         fun onSession(token: String, userId: String, userName: String) {
-            if (token == lastToken) return
+            // token + userId: cobre login, logout e troca de comprador no aparelho.
+            val sessionKey = "$token|$userId"
+            if (sessionKey == lastSessionKey) return
+            val previousSession = currentSession
+            lastSessionKey = sessionKey
             lastToken = token
+            currentSession = if (token.isBlank()) null else Session(token, userId, userName)
+
             lifecycleScope.launch {
                 sessionManager.saveSession(
                     token = token,
@@ -184,6 +258,14 @@ class MainActivity : AppCompatActivity() {
                     userName = userName,
                 )
                 updateGpsStatusUi()
+
+                if (token.isBlank()) {
+                    // Logout: o aparelho não deve mais receber pedido deste comprador.
+                    previousSession?.let { PushRegistrar.unregister(this@MainActivity, it) }
+                } else {
+                    // Logado: registra/atualiza o token FCM do aparelho no backend.
+                    currentSession?.let { PushRegistrar.sync(this@MainActivity, session = it) }
+                }
             }
         }
     }
@@ -244,7 +326,7 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetTextI18n")
     private fun updateGpsStatusUi() {
-        val logged = lastToken != null
+        val logged = !lastToken.isNullOrBlank()
         binding.tvGpsStatus.text = when {
             !TrackingState.running -> getString(R.string.tracking_off)
             !logged -> "Rastreando… aguardando login no site"

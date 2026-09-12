@@ -128,4 +128,60 @@ class ApiClient(private val timeoutSeconds: Long = 30) {
             ApiResult.Error("Falha de conexão ao alternar viagem: ${e.message ?: ""}")
         }
     }
+
+    /**
+     * Registra o token FCM do aparelho no backend — POST /api/buyer-push/register.
+     * Autenticado com o JWT do site (só Comprador é aceito).
+     */
+    suspend fun registerFcmToken(
+        authToken: String,
+        fcmToken: String,
+        platform: String = "android"
+    ): ApiResult<JSONObject> = postAuthorizedJson(
+        path = "/api/buyer-push/register",
+        authToken = authToken,
+        body = JSONObject()
+            .put("token", fcmToken)
+            .put("platform", platform),
+        errorLabel = "registrar o token de notificação",
+    )
+
+    /**
+     * Remove o token FCM do aparelho (logout) — POST /api/buyer-push/unregister.
+     * Sem isso o celular continuaria recebendo pedido do comprador deslogado.
+     */
+    suspend fun unregisterFcmToken(
+        authToken: String,
+        fcmToken: String
+    ): ApiResult<JSONObject> = postAuthorizedJson(
+        path = "/api/buyer-push/unregister",
+        authToken = authToken,
+        body = JSONObject().put("token", fcmToken),
+        errorLabel = "remover o token de notificação",
+    )
+
+    private suspend fun postAuthorizedJson(
+        path: String,
+        authToken: String,
+        body: JSONObject,
+        errorLabel: String,
+    ): ApiResult<JSONObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("${AppConfig.BASE_URL}$path")
+                .header("Authorization", "Bearer $authToken")
+                .header("x-auth-token", authToken)
+                .post(body.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { resp ->
+                val text = resp.body?.string() ?: ""
+                val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
+                if (resp.isSuccessful) ApiResult.Success(json)
+                else ApiResult.Error(json.optString("error", "Falha ao $errorLabel (HTTP ${resp.code})."), resp.code)
+            }
+        } catch (e: Exception) {
+            ApiResult.Error("Falha de conexão ao $errorLabel: ${e.message ?: ""}")
+        }
+    }
 }

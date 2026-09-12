@@ -10,6 +10,7 @@ Aplicativo Android nativo (Kotlin) para o **comprador** logar no sistema ERP Ges
   - Envia a **posição atual** para `POST /api/buyer-tracking` a cada 30s.
   - Registra **eventos no histórico** (`POST /api/buyer-tracking-events`) quando há movimento ≥ 50m.
 - **Viagem de compras**: iniciar/finalizar viagem via `POST /api/buyer-trips` (para métricas de tempo médio de retorno).
+- **Notificação nativa (FCM)** quando um pedido de compra é atribuído ao comprador logado; tocar na notificação abre a tela do pedido no WebView.
 - **Notificação permanente** enquanto o rastreamento está ativo.
 - **Bateria**: solicita isenção de otimização de bateria para manter o GPS em segundo plano.
 
@@ -28,6 +29,8 @@ Aplicativo Android nativo (Kotlin) para o **comprador** logar no sistema ERP Ges
 | `POST /api/buyer-tracking` | Atualiza a posição atual do comprador (upsert) |
 | `POST /api/buyer-tracking-events` | Registra evento de posição no histórico |
 | `POST /api/buyer-trips` | Inicia/finaliza uma viagem de compras |
+| `POST /api/buyer-push/register` | Registra o token FCM do aparelho para o comprador logado |
+| `POST /api/buyer-push/unregister` | Remove o token FCM no logout |
 
 > A autenticação usa o header `Authorization: Bearer <token>` (o backend também aceita `x-auth-token`).
 
@@ -49,6 +52,7 @@ Ou via terminal (com JDK 17 e Android SDK configurados):
 - **Android SDK**: compileSdk 34 (instalar via Android Studio SDK Manager).
 - **JDK 17**: o Android Studio já inclui (JBR) em `C:\Program Files\Android\Android Studio\jbr`.
 - O SDK será baixado automaticamente no primeiro sync, se necessário.
+- **Firebase (notificações)**: preencher em `local.properties` (arquivo fora do git) as quatro chaves do projeto Firebase — `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_PROJECT_ID` e `FIREBASE_SENDER_ID`. O app inicializa o Firebase sozinho, então **não é necessário** o `google-services.json`. Sem essas chaves o app compila e o GPS funciona, mas não registra notificações.
 
 ## Configuração do servidor
 
