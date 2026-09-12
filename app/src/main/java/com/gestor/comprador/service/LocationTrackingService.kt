@@ -19,6 +19,8 @@ import com.gestor.comprador.R
 import com.gestor.comprador.data.ApiClient
 import com.gestor.comprador.data.ApiResult
 import com.gestor.comprador.data.SessionManager
+import com.gestor.comprador.push.PushNotifier
+import com.gestor.comprador.push.PushPoller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,6 +49,8 @@ class LocationTrackingService : Service(), LocationListener {
 
         /** Intervalo de envio ao backend (ms). */
         const val SEND_INTERVAL_MS = 30_000L
+        /** Intervalo de consulta dos avisos de pedido atribuído (ms). */
+        const val PUSH_INTERVAL_MS = 30_000L
         /** Distância mínima (metros) para registrar um novo evento. */
         const val MIN_EVENT_DISTANCE_M = 50f
         /** Precisão mínima aceita (metros). */
@@ -55,6 +59,7 @@ class LocationTrackingService : Service(), LocationListener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var sendJob: Job? = null
+    private var pushJob: Job? = null
     private var locationManager: LocationManager? = null
     private var lastEventLocation: Location? = null
     private var sessionManager: SessionManager? = null
@@ -97,6 +102,17 @@ class LocationTrackingService : Service(), LocationListener {
             while (isActive) {
                 sendCurrentPosition()
                 delay(SEND_INTERVAL_MS)
+            }
+        }
+
+        // B1 — avisos de pedido atribuído. Fica em um job separado para não
+        // interferir na lógica do GPS; sem sessão do site, o poll é no-op.
+        PushNotifier.ensureChannel(this)
+        pushJob?.cancel()
+        pushJob = scope.launch {
+            while (isActive) {
+                pollPendingNotifications()
+                delay(PUSH_INTERVAL_MS)
             }
         }
     }
@@ -168,6 +184,15 @@ class LocationTrackingService : Service(), LocationListener {
         }
     }
 
+    /**
+     * Busca os avisos de pedido atribuído e mostra a notificação nativa.
+     * O backend entrega cada aviso uma única vez, então repetir o poll é seguro.
+     */
+    private suspend fun pollPendingNotifications() {
+        val session = sessionManager?.read() ?: return
+        PushPoller.poll(this, session)
+    }
+
     /** Registra um evento quando houve movimento significativo. */
     private suspend fun sendEventIfMoved(loc: Location) {
         val s = sessionManager?.read() ?: return
@@ -200,6 +225,8 @@ class LocationTrackingService : Service(), LocationListener {
     private fun stopTracking() {
         sendJob?.cancel()
         sendJob = null
+        pushJob?.cancel()
+        pushJob = null
         locationManager?.removeUpdates(this)
         locationManager = null
         TrackingState.running = false

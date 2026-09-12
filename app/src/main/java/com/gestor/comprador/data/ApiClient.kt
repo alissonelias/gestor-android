@@ -6,6 +6,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -14,6 +15,15 @@ sealed class ApiResult<out T> {
     data class Success<T>(val data: T) : ApiResult<T>()
     data class Error(val message: String, val httpCode: Int = 0) : ApiResult<Nothing>()
 }
+
+/** Aviso de pedido de compra atribuído, aguardando exibição no aparelho. */
+data class PendingPush(
+    val id: Long,
+    val title: String,
+    val body: String,
+    val path: String?,
+    val orderId: String?,
+)
 
 /**
  * Cliente HTTP para o backend do Gestor (apenas endpoints de rastreamento).
@@ -130,58 +140,51 @@ class ApiClient(private val timeoutSeconds: Long = 30) {
     }
 
     /**
-     * Registra o token FCM do aparelho no backend — POST /api/buyer-push/register.
-     * Autenticado com o JWT do site (só Comprador é aceito).
+     * Busca os avisos de pedido atribuído pendentes — GET /api/buyer-push/pending.
+     *
+     * Notificação local (sem Firebase): o backend entrega cada aviso uma única
+     * vez e o app monta a notificação nativa. Autenticado com o JWT do site.
      */
-    suspend fun registerFcmToken(
-        authToken: String,
-        fcmToken: String,
-        platform: String = "android"
-    ): ApiResult<JSONObject> = postAuthorizedJson(
-        path = "/api/buyer-push/register",
-        authToken = authToken,
-        body = JSONObject()
-            .put("token", fcmToken)
-            .put("platform", platform),
-        errorLabel = "registrar o token de notificação",
-    )
+    suspend fun fetchPendingNotifications(authToken: String): ApiResult<List<PendingPush>> =
+        withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("${AppConfig.BASE_URL}/api/buyer-push/pending")
+                    .header("Authorization", "Bearer $authToken")
+                    .header("x-auth-token", authToken)
+                    .get()
+                    .build()
 
-    /**
-     * Remove o token FCM do aparelho (logout) — POST /api/buyer-push/unregister.
-     * Sem isso o celular continuaria recebendo pedido do comprador deslogado.
-     */
-    suspend fun unregisterFcmToken(
-        authToken: String,
-        fcmToken: String
-    ): ApiResult<JSONObject> = postAuthorizedJson(
-        path = "/api/buyer-push/unregister",
-        authToken = authToken,
-        body = JSONObject().put("token", fcmToken),
-        errorLabel = "remover o token de notificação",
-    )
-
-    private suspend fun postAuthorizedJson(
-        path: String,
-        authToken: String,
-        body: JSONObject,
-        errorLabel: String,
-    ): ApiResult<JSONObject> = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder()
-                .url("${AppConfig.BASE_URL}$path")
-                .header("Authorization", "Bearer $authToken")
-                .header("x-auth-token", authToken)
-                .post(body.toString().toRequestBody(jsonMediaType))
-                .build()
-
-            client.newCall(request).execute().use { resp ->
-                val text = resp.body?.string() ?: ""
-                val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
-                if (resp.isSuccessful) ApiResult.Success(json)
-                else ApiResult.Error(json.optString("error", "Falha ao $errorLabel (HTTP ${resp.code})."), resp.code)
+                client.newCall(request).execute().use { resp ->
+                    val text = resp.body?.string() ?: ""
+                    if (!resp.isSuccessful) {
+                        val error = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
+                        ApiResult.Error(
+                            error.optString("error", "Falha ao buscar avisos (HTTP ${resp.code})."),
+                            resp.code
+                        )
+                    } else {
+                        val json = try { JSONObject(text) } catch (e: Exception) { JSONObject() }
+                        val array = json.optJSONArray("notifications") ?: JSONArray()
+                        val items = ArrayList<PendingPush>(array.length())
+                        for (i in 0 until array.length()) {
+                            val item = array.optJSONObject(i) ?: continue
+                            val data = item.optJSONObject("data") ?: JSONObject()
+                            items.add(
+                                PendingPush(
+                                    id = item.optLong("id"),
+                                    title = item.optString("title", "Pedido de compra"),
+                                    body = item.optString("body", ""),
+                                    path = data.optString("path", "").takeIf { it.isNotBlank() },
+                                    orderId = data.optString("orderId", "").takeIf { it.isNotBlank() },
+                                )
+                            )
+                        }
+                        ApiResult.Success(items)
+                    }
+                }
+            } catch (e: Exception) {
+                ApiResult.Error("Falha de conexão ao buscar avisos: ${e.message ?: ""}")
             }
-        } catch (e: Exception) {
-            ApiResult.Error("Falha de conexão ao $errorLabel: ${e.message ?: ""}")
         }
-    }
 }

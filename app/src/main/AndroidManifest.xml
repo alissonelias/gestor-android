@@ -37,28 +37,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Serviço de rastreamento em foreground (GPS em segundo plano) -->
+        <!-- Serviço de rastreamento em foreground (GPS em segundo plano).
+             Também é quem consulta os avisos de pedido atribuído (B1). -->
         <service
             android:name=".service.LocationTrackingService"
             android:exported="false"
             android:foregroundServiceType="location" />
-
-        <!-- B1 — push nativo do pedido atribuído (FCM). Não substitui o GPS. -->
-        <service
-            android:name=".push.GestorMessagingService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
-            </intent-filter>
-        </service>
-
-        <!-- Notificação do sistema cai no canal criado pelo app (heads-up). -->
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="gestor_pedidos" />
-        <meta-data
-            android:name="com.google.firebase.messaging.default_notification_icon"
-            android:resource="@drawable/ic_launcher_foreground" />
 
     </application>
 

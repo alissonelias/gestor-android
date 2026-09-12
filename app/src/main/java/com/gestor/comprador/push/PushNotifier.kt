@@ -14,9 +14,9 @@ import com.gestor.comprador.R
 /**
  * Notificação nativa (heads-up) do pedido de compra atribuído.
  *
- * O canal é criado cedo (o MainActivity chama [ensureChannel] no boot e o
- * serviço do Firebase chama de novo em background) para o `channel_id` enviado
- * pelo backend existir quando a mensagem chegar.
+ * É o app que monta a notificação (não há FCM): o [PushPoller] pega os avisos no
+ * backend e chama [show]. O canal é criado cedo — o MainActivity chama
+ * [ensureChannel] no boot e o serviço de GPS chama de novo em background.
  */
 object PushNotifier {
 

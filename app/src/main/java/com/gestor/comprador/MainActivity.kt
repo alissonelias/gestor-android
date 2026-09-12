@@ -12,7 +12,6 @@ import android.os.PowerManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -30,9 +29,8 @@ import com.gestor.comprador.data.AppConfig
 import com.gestor.comprador.data.Session
 import com.gestor.comprador.data.SessionManager
 import com.gestor.comprador.databinding.ActivityMainBinding
-import com.gestor.comprador.push.FirebaseConfig
 import com.gestor.comprador.push.PushNotifier
-import com.gestor.comprador.push.PushRegistrar
+import com.gestor.comprador.push.PushPoller
 import com.gestor.comprador.service.LocationTrackingService
 import com.gestor.comprador.service.TrackingState
 import kotlinx.coroutines.launch
@@ -88,12 +86,9 @@ class MainActivity : AppCompatActivity() {
 
         sessionManager = SessionManager(this)
 
-        // FCM: canal criado já no boot para o push do pedido aparecer como
-        // heads-up; credenciais ausentes apenas desligam o push (GPS segue igual).
+        // Notificação de pedido atribuído: canal criado já no boot (o serviço de
+        // GPS é quem busca os avisos e exibe em segundo plano).
         PushNotifier.ensureChannel(this)
-        if (!FirebaseConfig.isConfigured) {
-            Log.w("MainActivity", "FCM não configurado — o app segue sem notificações.")
-        }
         pendingPushPath = extractPushPath(intent)
 
         setupWebView()
@@ -141,15 +136,12 @@ class MainActivity : AppCompatActivity() {
     // ------------------------------------------------------------------
 
     /**
-     * Lê o caminho da tela a partir do intent. Cobre os dois formatos:
-     * - notificação do próprio app (extra [EXTRA_PUSH_PATH]);
-     * - notificação exibida pelo sistema, que copia as chaves do `data` do FCM
-     *   para os extras do intent (chave "path").
+     * Lê o caminho da tela a partir do intent da notificação montada pelo app
+     * (extra [EXTRA_PUSH_PATH]).
      */
     private fun extractPushPath(intent: Intent?): String? {
         if (intent == null) return null
-        val raw = intent.getStringExtra(EXTRA_PUSH_PATH) ?: intent.getStringExtra("path")
-        return sanitizePushPath(raw)
+        return sanitizePushPath(intent.getStringExtra(EXTRA_PUSH_PATH))
     }
 
     /** Aceita só caminho relativo do próprio site (nunca URL absoluta/outro host). */
@@ -246,7 +238,6 @@ class MainActivity : AppCompatActivity() {
             // token + userId: cobre login, logout e troca de comprador no aparelho.
             val sessionKey = "$token|$userId"
             if (sessionKey == lastSessionKey) return
-            val previousSession = currentSession
             lastSessionKey = sessionKey
             lastToken = token
             currentSession = if (token.isBlank()) null else Session(token, userId, userName)
@@ -259,13 +250,9 @@ class MainActivity : AppCompatActivity() {
                 )
                 updateGpsStatusUi()
 
-                if (token.isBlank()) {
-                    // Logout: o aparelho não deve mais receber pedido deste comprador.
-                    previousSession?.let { PushRegistrar.unregister(this@MainActivity, it) }
-                } else {
-                    // Logado: registra/atualiza o token FCM do aparelho no backend.
-                    currentSession?.let { PushRegistrar.sync(this@MainActivity, session = it) }
-                }
+                // Logado: busca os avisos de pedido atribuído já neste momento (o
+                // serviço de GPS continua consultando em segundo plano).
+                currentSession?.let { PushPoller.poll(this@MainActivity, it) }
             }
         }
     }
