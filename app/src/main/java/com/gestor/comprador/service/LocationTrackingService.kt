@@ -44,8 +44,18 @@ class LocationTrackingService : Service(), LocationListener {
     companion object {
         const val ACTION_START = "com.gestor.comprador.action.START"
         const val ACTION_STOP = "com.gestor.comprador.action.STOP"
-        private const val CHANNEL_ID = "gestor_location"
+        /**
+         * Canal do Foreground Service. IMPORTANCE_MIN: silencioso e recolhido,
+         * sem som/vibração e sem ícone na barra de status — a notificação do
+         * rastreamento é obrigatória, mas não deve competir com o aviso de pedido.
+         */
+        private const val CHANNEL_ID = "gestor_location_v2"
+        /** Canal antigo (IMPORTANCE_LOW), removido ao subir: não dava para baixar
+         * a importância de um canal já criado no aparelho. */
+        private const val LEGACY_CHANNEL_ID = "gestor_location"
         private const val NOTIFICATION_ID = 1001
+        private const val TEXT_ACTIVE = "Rastreamento ativo"
+        private const val TEXT_ERROR = "Falha ao enviar posição — tentando novamente"
 
         /** Intervalo de envio ao backend (ms). */
         const val SEND_INTERVAL_MS = 30_000L
@@ -63,6 +73,8 @@ class LocationTrackingService : Service(), LocationListener {
     private var locationManager: LocationManager? = null
     private var lastEventLocation: Location? = null
     private var sessionManager: SessionManager? = null
+    /** Último texto exibido: evita reexibir a notificação a cada ciclo. */
+    private var lastNotificationText: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -119,7 +131,8 @@ class LocationTrackingService : Service(), LocationListener {
 
     private fun startForegroundCompat() {
         val channelId = createChannel()
-        val notification = buildNotification(channelId, "Rastreamento ativo")
+        val notification = buildNotification(channelId, TEXT_ACTIVE)
+        lastNotificationText = TEXT_ACTIVE
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         } else {
@@ -129,13 +142,16 @@ class LocationTrackingService : Service(), LocationListener {
 
     private fun createChannel(): String {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.deleteNotificationChannel(LEGACY_CHANNEL_ID)
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Rastreamento de Localização",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_MIN
         ).apply {
             description = "Mantém o GPS ativo para persistir a localização do comprador."
             setShowBadge(false)
+            enableVibration(false)
+            setSound(null, null)
         }
         nm.createNotificationChannel(channel)
         return CHANNEL_ID
@@ -153,10 +169,17 @@ class LocationTrackingService : Service(), LocationListener {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pending)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
             .build()
     }
 
+    /** Só reexibe quando o texto muda de verdade (erro ↔ ativo). */
     private fun updateNotification(text: String) {
+        if (text == lastNotificationText) return
+        lastNotificationText = text
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, buildNotification(CHANNEL_ID, text))
     }
@@ -178,9 +201,10 @@ class LocationTrackingService : Service(), LocationListener {
         TrackingState.lastSendAt = System.currentTimeMillis()
 
         if (result is ApiResult.Error) {
-            updateNotification("Falha ao enviar posição — tentando novamente...")
+            updateNotification(TEXT_ERROR)
         } else {
-            updateNotification("Rastreamento ativo — ${loc.latitude}, ${loc.longitude}")
+            // Texto fixo (sem coordenadas): o canal é MIN e não deve reaparecer.
+            updateNotification(TEXT_ACTIVE)
         }
     }
 
