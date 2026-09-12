@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Iniciar serviço em background após app fechado (Android 8+) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -43,6 +44,11 @@
             android:name=".service.LocationTrackingService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- Para a vibração persistente quando o aviso é dispensado/deslizado. -->
+        <receiver
+            android:name=".push.PushDismissReceiver"
+            android:exported="false" />
 
     </application>
 

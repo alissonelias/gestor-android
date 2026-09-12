@@ -38,6 +38,7 @@ object PushPoller {
         for (notification in notifications) {
             PushNotifier.show(
                 context = app,
+                pushId = notification.id,
                 title = notification.title,
                 body = notification.body,
                 path = notification.path,

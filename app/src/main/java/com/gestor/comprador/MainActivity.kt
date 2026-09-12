@@ -107,6 +107,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Aviso atendido (tap abriu o app): a vibração persistente pode parar.
+        PushNotifier.stopVibration()
         updateGpsStatusUi()
     }
 
